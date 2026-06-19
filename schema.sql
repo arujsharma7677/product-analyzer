@@ -1,0 +1,10 @@
+-- ⚠️ DEPRECATED — do not run this file.
+--
+-- The credit system has moved to a clean, user_number–keyed schema.
+-- Run this instead, in the Supabase SQL Editor:
+--
+--     migrations/001_credit_system.sql
+--
+-- That single migration creates user_credits, admin_recharge_log,
+-- user_usage, credit_transactions + indexes, views, triggers and RLS,
+-- and drops the old prototype tables (usage_log, old user_credits).
