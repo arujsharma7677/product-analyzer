@@ -11,9 +11,9 @@ usage row. It NEVER updates user_credits directly.
 from fastapi import HTTPException
 from app.database import db
 
-# Credits charged per token (input + output). Mirrors the generated
-# column user_usage.credits_deducted = (input + output) * 4.
-CREDITS_PER_TOKEN = 1
+# Minimum credits charged per analysis. The actual charge mirrors the
+# generated column user_usage.credits_deducted = max(MIN_CREDITS, input + output).
+MIN_CREDITS = 6500
 
 
 async def get_user_number(auth_id: str) -> int:
@@ -114,7 +114,7 @@ async def log_usage(
                 detail="Insufficient credits to complete this analysis. Please recharge.",
             )
         raise
-    return (input_tokens + output_tokens) * CREDITS_PER_TOKEN
+    return max(MIN_CREDITS, input_tokens + output_tokens)
 
 
 async def recharge(

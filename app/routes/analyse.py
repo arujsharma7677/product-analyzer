@@ -326,13 +326,13 @@ async def analyse_product(
             input_tokens,
             output_tokens,
             catalog_name=product_name,
-            model_used="claude-sonnet-4-5",
+            model_used="claude-haiku-4-5",
             status="success",
         )
 
-        # Charge a flat minimum of 12,000 credits per transaction, or the
-        # token-based amount (input + output) * 4 if that is higher.
-        credits_deducted = max(6000, (input_tokens + output_tokens) * 1)
+        # Charge a flat minimum of 6,500 credits per transaction, or the
+        # token-based amount (input + output) if that is higher.
+        credits_deducted = max(6500, input_tokens + output_tokens)
 
         return {
             "analysis": analysis,

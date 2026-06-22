@@ -86,10 +86,10 @@ CREATE TABLE public.user_usage (
   input_tokens      integer NOT NULL,
   output_tokens     integer NOT NULL,
   total_tokens      integer GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
-  -- credits_deducted is ALWAYS (input_tokens + output_tokens) * 4.
+  -- credits_deducted is ALWAYS max(6500, input_tokens + output_tokens).
   -- Made a generated column so the rule can never be violated by callers.
   credits_deducted  numeric(12,2)
-                      GENERATED ALWAYS AS ((input_tokens + output_tokens) * 4) STORED,
+                      GENERATED ALWAYS AS (GREATEST(6500, (input_tokens + output_tokens))) STORED,
   catalog_id        uuid,
   catalog_name      text,
   model_used        text DEFAULT 'claude-sonnet-4-6',
