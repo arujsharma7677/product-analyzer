@@ -251,15 +251,12 @@ async def analyse_product(
     if not images or len(images) == 0:
         raise HTTPException(status_code=400, detail="At least 1 image required")
 
-    if len(images) > 5:
-        raise HTTPException(status_code=400, detail="Maximum 5 images allowed per analysis")
-
     try:
         # Prepare message content
         message_content = []
 
-        # Add all images
-        for image_file in images:
+        # Accept any number of uploads, but only send the first 3 to Claude
+        for image_file in images[:3]:
             image_data = await image_file.read()
             image_base64 = base64.standard_b64encode(image_data).decode("utf-8")
 
