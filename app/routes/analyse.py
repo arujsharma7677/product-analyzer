@@ -285,7 +285,15 @@ async def analyse_product(
         # system prompt so the cache prefix stays byte-identical across requests.
         text = f"Product: {product_name}"
         if additional_requirements.strip():
-            text += f"\nAdditional requirements: {additional_requirements.strip()}"
+            text += (
+                "\n\nADDITIONAL REQUIREMENT (from the user): "
+                f"{additional_requirements.strip()}\n"
+                "Treat the above as an extra requirement that MUST be analysed and "
+                "properly articulated into the output. Incorporate it into the "
+                "`tags` field (add relevant search keywords reflecting it) and into "
+                "the `productDetails` field (describe how it applies to this product). "
+                "Do not let it override any of the allowed-value rules above."
+            )
         message_content.append({
             "type": "text",
             "text": text
