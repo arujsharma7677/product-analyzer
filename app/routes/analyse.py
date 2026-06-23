@@ -219,6 +219,7 @@ def get_user_from_token(token: str):
 async def analyse_product(
     product_name: str = Form(...),
     images: list[UploadFile] = File(...),
+    additional_requirements: str = Form(""),
     authorization: str = Header(None),
 ):
     """
@@ -226,6 +227,7 @@ async def analyse_product(
 
     - product_name: Name of the product (required)
     - images: Up to 5 product images (required)
+    - additional_requirements: Optional free-text instructions from the user
     - Returns: Product analysis with token usage and cost
     """
 
@@ -281,9 +283,12 @@ async def analyse_product(
 
         # Add per-request text (product name) — kept separate from the cached
         # system prompt so the cache prefix stays byte-identical across requests.
+        text = f"Product: {product_name}"
+        if additional_requirements.strip():
+            text += f"\nAdditional requirements: {additional_requirements.strip()}"
         message_content.append({
             "type": "text",
-            "text": f"Product: {product_name}"
+            "text": text
         })
 
         # Call Claude API. The large, unchanging VISION_PROMPT goes in `system`
