@@ -4,205 +4,12 @@ import base64
 import json
 from app.config import settings
 from app.services import credit_service
+from app.services.vision_prompts import build_vision_prompt
 from datetime import datetime
 import jwt
 
 router = APIRouter()
 client = Anthropic(api_key=settings.anthropic_api_key)
-
-VISION_PROMPT = """You are a senior Myntra catalog specialist with 10+ years of experience filling the Myntra SKU template. You have catalogued thousands of real Myntra listings. Analyze all provided product images and return ONLY a valid JSON object — no markdown, no backticks, no explanation.
-
-═══════════════════════════════════════
-CRITICAL: USE ONLY ALLOWED VALUES
-═══════════════════════════════════════
-
-Any value outside these lists will cause the listing to be REJECTED.
-
-COLORS (map every shade to closest — "dark blue"→"Navy Blue", "off-white"→"Off White", "ivory"→"Cream"):
-Assorted, Beige, Black, Blue, Bronze, Brown, Burgundy, Camel Brown, Champagne, Charcoal, Coffee Brown, Copper, Coral, Cream, Fluorescent Green, Fuchsia, Gold, Green, Grey, Grey Melange, Khaki, Lavender, Lime Green, Magenta, Maroon, Mauve, Metallic, Multi, Mustard, NA, Navy Blue, Nude, Off White, Olive, Orange, Peach, Pink, Purple, Red, Rose, Rose Gold, Rust, Sea Green, Silver, Steel, Tan, Taupe, Teal, Transparent, Turquoise Blue, Violet, White, Yellow
-
-AGE GROUPS (MUST include gender — "Adults" alone is INVALID):
-Adults-Men, Adults-Unisex, Adults-Women, Kids-Boys, Kids-Girls, Kids-Unisex
-
-FASHION TYPES:
-Core = everyday basics/solids | Fashion = seasonal/trendy/prints/embellishments/festive/ethnic sets | Core M = modern basics | SMU = special collaboration
-Values: Core, Core M, Fashion, SMU
-
-USAGE (single value — "Everyday Wear" / "Casual Wear" are INVALID):
-Casual, Ethnic, Formal, Home, NA, Party, Smart Casual, Sports, Travel
-→ Ethnic wear/kurtas/sarees/lehengas/co-ords = "Ethnic"
-→ Party/sequin/occasion wear = "Party"
-→ Office/formals = "Formal"
-→ Daily western casuals = "Casual"
-
-SEASONS ("All Season" is INVALID — always pick closest):
-Spring = festive Indian ethnic (Diwali/Eid/wedding), florals, pastels, light festive fabrics
-Summer = cotton/linen, bright colors, beachwear, light everyday fabrics
-Fall = layering pieces, earth tones, medium-weight fabrics
-Winter = heavy fabrics, woolens, jackets, darker colors
-Values: Fall, Spring, Summer, Winter
-
-ARTICLE TYPES (exact Myntra names — "Suit" / "Ethnic Suit" are INVALID):
-Kurtas, Kurta Sets, Sarees, Lehengas, Dupattas, Salwar Suits, Ethnic Dresses, Ethnic Tops, Ethnic Bottoms, Blouses, Lehenga Cholis, Kurtis,
-Tops, T-Shirts, Shirts, Dresses, Jeans, Trousers, Shorts, Skirts, Jumpsuits, Co-Ords, Sweatshirts, Sweaters, Jackets, Blazers, Coats, Dungarees, Playsuits,
-Casual Shirts, Formal Shirts, Polos, Casual Trousers, Formal Trousers, Suits, Kurtas,
-Boys T-Shirts, Girls Dresses, Girls T-Shirts, Boys Shorts, Boys Jeans,
-Innerwear, Sleepwear, Swimwear, Tracksuits, Tights
-→ Kurta + pajama/pant set = "Kurta Sets" | Kurta + palazzo = "Co-Ords" | Single kurta = "Kurtas" | 3-piece salwar = "Salwar Suits"
-
-OCCASIONS (single value): Ethnic, Casual, Formal, Party, Sports, Festive, Beach, Travel, Home, Work, Daily
-→ Ethnic coord/kurta sets in ethnic usage → "Ethnic" | Heavy festive pieces → "Party"
-
-SLEEVE LENGTHS: Sleeveless, Short Sleeves, Three-Quarter Sleeves, Long Sleeves, Cap Sleeves, Regular
-NECK TYPES: Round Neck, V-Neck, Square Neck, Boat Neck, Sweetheart Neck, Polo Collar, Shirt Collar, Mandarin Collar, Hooded, Cowl Neck, Off Shoulder, Halter Neck, Turtle Neck, Mock Collar
-PATTERNS: Solid, Printed, Striped, Checked, Embroidered, Self Design, Woven Design, Colourblocked, Dyed, Geometric, Floral, Abstract, Camouflage, Animal Print, Paisley, Tie & Dye
-→ "Embroidered Floral" is NOT valid — use "Embroidered" for kurta, "Floral" for bottom
-CLOSURES: Button, Zipper, Snap Button, Hook and Eye, Drawstring, Elasticated, Pull Over, Slip-On, Velcro, None, NA
-→ Pull-on palazzo/kurta with no closure = "Slip-On" or "NA" | Elastic waistband = "Elasticated" | Kurta with no buttons = "NA"
-HEMLINES: Straight, Curved, High-Low, Asymmetric, Flared, Ruffled, Tiered, Slit, Regular, Cropped, Midi, Maxi, Mini
-SLEEVE STYLING: Regular Sleeves, Puff Sleeves, Flared Sleeves, Bell Sleeves, Bishop Sleeves, Raglan Sleeves, Sleeveless
-LININGS: Lined, Unlined, NA  →  use "NA" if not determinable
-STITCHES: Ready to Wear, Semi-Stitched, Unstitched  →  "Ready to Wear" for ALL fully stitched garments. NEVER leave empty.
-WASH CARE: Machine Wash, Hand Wash, Dry Clean Only
-→ Embroidered/ethnic sets → "Hand Wash" | Plain cotton casuals → "Machine Wash" | Silk → "Dry Clean Only"
-FABRICS: Cotton, Pure Cotton, Cotton Blend, Polyester, Viscose, Linen, Silk, Satin, Chiffon, Georgette, Crepe, Denim, Nylon, Velvet, Wool, Rayon, Spandex, Net, Lycra, Fleece, Knit, Jersey, Organza, Brocade, Art Silk, Chanderi, Khadi, Lace
-→ "Pure Cotton" when appears 100% cotton | "Cotton Blend" when mixed fibers
-SUSTAINABLE: Regular (default), Sustainable (only if eco/organic/recycled label is visible)
-
-═══════════════════════════════════════
-KEY FIELD RULES (read every rule)
-═══════════════════════════════════════
-
-brandColourRemarks: ALL CAPS. Primary color + key design detail.
-  ✓ "NAVY BLUE WITH RED EMBELLISHMENT"
-  ✓ "CREAM" (solid, no notable detail)
-  ✓ "NAVY BLUE KURTA WITH RED EMBROIDERED NECKLINE AND FLORAL PRINTED PAJAMAS WITH RED POM-POM DUPATTA"
-
-ageGroup: Always include gender. Women's → "Adults-Women". Men's → "Adults-Men". Never just "Adults".
-
-productDisplayName: [Brand if known] [Gender] [Color] [Pattern/Detail] [Fabric?] [ArticleType] [with Add-on?]
-  ✓ "Khushal K Women Cotton Co-Ords Set"
-  ✓ "Women Navy Blue Embroidered Kurta Pajama Set with Dupatta"
-  ✗ "Women Blue Embroidered Ethnic Suit" ← wrong article type
-
-listViewName: Shorter version, max ~50 chars.
-  ✓ "Navy Blue Embroidered Kurta Pajama Set with Dupatta"
-
-materialCareDescription: CRITICAL — use actual garment component names, NOT generic "Top/Bottom". Max 90 words:
-  Kurta + Pajama set:   "Kurta fabric : Cotton Blend || Pajama Fabric : Cotton Blend"
-  Kurta + Palazzo:      "Kurta fabric : Cotton || Palazzo Fabric : Cotton"
-  Kurta + Salwar:       "Kurta fabric : Cotton || Salwar Fabric : Cotton"
-  Choli + Lehenga:      "Choli fabric : Silk || Lehenga Fabric : Net"
-  Single Shirt:         "Shirt fabric : Cotton"
-  Single Dress:         "Dress fabric : Georgette"
-  Single Top:           "Top fabric : Cotton"
-  ✗ NEVER use "Top Fabric : Cotton || Bottom Fabric : Cotton" ← this format is WRONG
-
-stitch: "Ready to Wear" for ALL fully stitched garments. NEVER leave empty for stitched garments.
-
-topClosure: "NA" for pull-on kurtas (most ethnic kurtas have no buttons/zipper).
-  "Button" only if buttons clearly visible. "Zipper" only if zipper visible.
-
-bottomClosure: "Elasticated" for pajamas/palazzos/salwars with elastic waist.
-  "Slip-On" for pull-on trousers with no visible mechanism. "NA" if not determinable.
-
-addOns: What is physically included. "Dupatta" for sets with dupatta. "Belt" if included.
-  Use "NA" if no add-ons — NOT empty string "".
-
-character: "NA" unless licensed character (Disney/Marvel) is clearly visible. NOT "None".
-
-lining: "Unlined" for regular kurtas/casual tops. "Lined" for blazers/lehengas.
-  "NA" if not determinable.
-
-packageContains: Use "||" separator with "1 - [Garment]" format:
-  ✓ "1 - Kurta || 1 - Pajama || 1 - Dupatta"
-  ✓ "1 - Kurta || 1 - Palazzo"
-  ✓ "1 - Shirt"
-  ✗ "1 Kurta, 1 Pajama, 1 Dupatta" ← WRONG format
-
-numberOfItems: Count of pieces as string: "1", "2", "3".
-
-numberOfPockets: String. Kurtas/ethnic sets → "0". Jeans → "4". Shirts → "1" or "2". "" if uncertain.
-
-season: Indian festive ethnic → "Spring". Light cottons → "Summer". Never "All Season".
-
-occasion: Single value only. Ethnic coord sets → "Ethnic". Festive heavy → "Party".
-
-tags: 8–12 comma-separated search keywords. Return "" if not useful.
-
-productDetails: 2–4 sentences on silhouette, design, fabric, contents. Max 90 words. Return "" if uncertain.
-
-styleNote: 1–2 sentences styling advice. Return "" if not useful.
-
-sizeAndFitDescription: Fit type and sizing notes. Max 90 words. Return "" if not determinable.
-
-detectedBrand: Only if brand logo/label clearly visible. Otherwise "".
-
-collectionName: Only if named collection visible. Otherwise "".
-
-═══════════════════════════════════════
-OUTPUT: return ONLY this raw JSON
-═══════════════════════════════════════
-
-{
-  "articleType": "",
-  "prominentColour": "",
-  "secondProminentColour": "",
-  "thirdProminentColour": "",
-  "brandColourRemarks": "",
-  "topFabric": "",
-  "bottomFabric": "",
-  "topType": "",
-  "bottomType": "",
-  "topPattern": "",
-  "bottomPattern": "",
-  "sleeveLength": "",
-  "neck": "",
-  "occasion": "",
-  "fashionType": "",
-  "usage": "",
-  "washCare": "",
-  "lining": "",
-  "numberOfPockets": "",
-  "sleeveStyling": "",
-  "topHemline": "",
-  "bottomHemline": "",
-  "addOns": "",
-  "stitch": "",
-  "character": "",
-  "productDetails": "",
-  "listViewName": "",
-  "materialCareDescription": "",
-  "sizeAndFitDescription": "",
-  "productDisplayName": "",
-  "packageContains": "",
-  "numberOfItems": "",
-  "tags": "",
-  "collectionName": "",
-  "ageGroup": "",
-  "season": "",
-  "detectedBrand": "",
-  "sustainable": "",
-  "bottomClosure": "",
-  "topClosure": "",
-  "styleNote": ""
-}
-
-FINAL CHECKS before returning:
-□ brandColourRemarks in ALL CAPS
-□ ageGroup has gender suffix (Adults-Women / Adults-Men, NOT just "Adults")
-□ season is Fall / Spring / Summer / Winter ONLY (NOT "All Season")
-□ usage is from the 9 valid options (NOT "Everyday Wear")
-□ materialCareDescription uses actual garment names: "Kurta fabric : X || Pajama Fabric : X" (NOT "Top Fabric")
-□ stitch = "Ready to Wear" for fully stitched garments (NOT empty, NOT "Machine Stitched")
-□ numberOfPockets is a string ("0", "1"...) or ""
-□ occasion is a single value
-□ sustainable = "Regular" unless eco-label visible
-□ packageContains uses "1 - Garment || 1 - Garment" format
-□ character = "NA" not "None"
-□ addOns = "NA" not "" when there are no add-ons
-□ topClosure = "NA" for pull-on kurtas (NOT "None" or "Pull Over")
-□ Return ONLY raw JSON — no markdown, no backticks, no explanation"""
 
 # Platforms a request may target. Each selected platform is charged a flat
 # CREDITS_PER_PLATFORM (6500) and logged as its own user_usage row.
@@ -255,7 +62,11 @@ async def analyse_product(
     - product_name: Name of the product (required)
     - images: Up to 5 product images (required)
     - platforms: One or more target platforms (e.g. myntra, ajio). Charged a
-      flat 6500 credits each.
+      flat 6500 credits each. The Claude prompt/output scales to exactly the
+      platforms requested (see app/services/vision_prompts.py) — selecting
+      both myntra + ajio still costs ONE Claude call (one set of image
+      tokens), not two, since the same garment read is reused for both
+      platforms' output sections.
     - additional_requirements: Optional free-text instructions from the user
     - Returns: Product analysis with token usage and cost
     """
@@ -315,7 +126,8 @@ async def analyse_product(
             })
 
         # Add per-request text (product name) — kept separate from the cached
-        # system prompt so the cache prefix stays byte-identical across requests.
+        # system prompt so the cache prefix stays byte-identical across
+        # requests that select the same platform(s).
         text = f"Product: {product_name}"
         if additional_requirements.strip():
             text += (
@@ -332,14 +144,22 @@ async def analyse_product(
             "text": text
         })
 
-        # Call Claude API. The large, unchanging VISION_PROMPT goes in `system`
-        # with cache_control so it's cached and billed at ~0.1x on repeat calls.
+        # Build a prompt scoped to exactly the platforms that were selected.
+        # This keeps the (cached) system prompt proportional to what's being
+        # asked for: myntra-only and ajio-only requests don't pay for the
+        # other platform's vocabulary, while a combined request still makes
+        # a single Claude call that reuses one garment read for both.
+        vision_prompt = build_vision_prompt(selected_platforms)
+
+        # Call Claude API. The large, unchanging per-platform-combo prompt
+        # goes in `system` with cache_control so it's cached and billed at
+        # ~0.1x on repeat calls with the same platform selection.
         response = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=2000,
+            max_tokens=2000 if len(selected_platforms) == 1 else 3200,
             system=[{
                 "type": "text",
-                "text": VISION_PROMPT,
+                "text": vision_prompt,
                 "cache_control": {"type": "ephemeral"}
             }],
             messages=[{
@@ -357,12 +177,21 @@ async def analyse_product(
 
         analysis = json.loads(response_text)
 
-        # Calculate costs
+        # Calculate costs.
+        # Haiku 4.5 pricing: input $1 / 1M, output $5 / 1M.
+        # Cached input is billed at ~0.1x, so split input tokens into
+        # cache-read vs fresh and price them separately — otherwise the
+        # reported INR overstates the true cost on every cache hit (which is
+        # most requests, since the per-platform prompt is cached).
         input_tokens = response.usage.input_tokens
         output_tokens = response.usage.output_tokens
+        cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        fresh_input = max(input_tokens - cache_read, 0)
 
-        # Pricing: Input $3/1M, Output $15/1M
-        input_cost = (input_tokens / 1_000_000) * 1 * settings.usd_to_inr
+        input_cost = (
+            (fresh_input / 1_000_000) * 1
+            + (cache_read / 1_000_000) * 0.1
+        ) * settings.usd_to_inr
         output_cost = (output_tokens / 1_000_000) * 5 * settings.usd_to_inr
         total_cost_inr = round(input_cost + output_cost, 2)
 
@@ -388,7 +217,7 @@ async def analyse_product(
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_inr": total_cost_inr,
-            "cache_read_input_tokens":response.usage.cache_read_input_tokens,
+            "cache_read_input_tokens": cache_read,
             "credits_deducted": credits_deducted,
             "credits_breakdown": credits_breakdown,
             "timestamp": datetime.utcnow().isoformat()
