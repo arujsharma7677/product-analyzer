@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy import desc, select
+
 from app.services import credit_service
 from app.middleware.auth_middleware import get_current_user
 from app.models.credits import AddCredits
-from app.database import db
+from app.database import SessionLocal
+from app.models.db import CreditTransaction, UserUsage
 
 router = APIRouter()
 
@@ -31,7 +34,7 @@ async def check_balance(user=Depends(get_current_user)):
 
 @router.post("/credits/recharge")
 async def recharge_user(body: AddCredits, user=Depends(get_current_user)):
-    """Admin recharge. Writes admin_recharge_log; DB trigger updates balance."""
+    """Admin recharge. Logs admin_recharge_log and updates the balance in code."""
     target = body.user_number
     credits = await credit_service.recharge(
         target,
@@ -49,28 +52,46 @@ async def recharge_user(body: AddCredits, user=Depends(get_current_user)):
 @router.get("/credits/history")
 async def usage_history(user=Depends(get_current_user)):
     user_number = await credit_service.get_user_number(user["id"])
-    rows = await db.fetch_all(
-        """SELECT type, input_tokens, output_tokens, total_tokens,
-                  credits_deducted, catalog_name, model_used, status, created_at
-           FROM user_usage
-           WHERE user_number = :n
-           ORDER BY created_at DESC
-           LIMIT 50""",
-        {"n": user_number},
-    )
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(
+                    UserUsage.type,
+                    UserUsage.input_tokens,
+                    UserUsage.output_tokens,
+                    UserUsage.total_tokens,
+                    UserUsage.credits_deducted,
+                    UserUsage.catalog_name,
+                    UserUsage.model_used,
+                    UserUsage.status,
+                    UserUsage.created_at,
+                )
+                .where(UserUsage.user_number == user_number)
+                .order_by(desc(UserUsage.created_at))
+                .limit(50)
+            )
+        ).mappings().all()
     return {"history": [dict(r) for r in rows]}
 
 
 @router.get("/credits/transactions")
 async def transactions(user=Depends(get_current_user)):
     user_number = await credit_service.get_user_number(user["id"])
-    rows = await db.fetch_all(
-        """SELECT transaction_type, amount, balance_before, balance_after,
-                  reference_type, description, created_at
-           FROM credit_transactions
-           WHERE user_number = :n
-           ORDER BY created_at DESC
-           LIMIT 100""",
-        {"n": user_number},
-    )
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(
+                    CreditTransaction.transaction_type,
+                    CreditTransaction.amount,
+                    CreditTransaction.balance_before,
+                    CreditTransaction.balance_after,
+                    CreditTransaction.reference_type,
+                    CreditTransaction.description,
+                    CreditTransaction.created_at,
+                )
+                .where(CreditTransaction.user_number == user_number)
+                .order_by(desc(CreditTransaction.created_at))
+                .limit(100)
+            )
+        ).mappings().all()
     return {"transactions": [dict(r) for r in rows]}

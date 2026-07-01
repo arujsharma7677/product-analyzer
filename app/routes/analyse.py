@@ -88,7 +88,7 @@ productDisplayName: [Brand if known] [Gender] [Color] [Pattern/Detail] [Fabric?]
 listViewName: Shorter version, max ~50 chars.
   ✓ "Navy Blue Embroidered Kurta Pajama Set with Dupatta"
 
-materialCareDescription: CRITICAL — use actual garment component names, NOT generic "Top/Bottom":
+materialCareDescription: CRITICAL — use actual garment component names, NOT generic "Top/Bottom". Max 90 words:
   Kurta + Pajama set:   "Kurta fabric : Cotton Blend || Pajama Fabric : Cotton Blend"
   Kurta + Palazzo:      "Kurta fabric : Cotton || Palazzo Fabric : Cotton"
   Kurta + Salwar:       "Kurta fabric : Cotton || Salwar Fabric : Cotton"
@@ -130,11 +130,11 @@ occasion: Single value only. Ethnic coord sets → "Ethnic". Festive heavy → "
 
 tags: 8–12 comma-separated search keywords. Return "" if not useful.
 
-productDetails: 2–4 sentences on silhouette, design, fabric, contents. Return "" if uncertain.
+productDetails: 2–4 sentences on silhouette, design, fabric, contents. Max 90 words. Return "" if uncertain.
 
 styleNote: 1–2 sentences styling advice. Return "" if not useful.
 
-sizeAndFitDescription: Fit type and sizing notes. Return "" if not determinable.
+sizeAndFitDescription: Fit type and sizing notes. Max 90 words. Return "" if not determinable.
 
 detectedBrand: Only if brand logo/label clearly visible. Otherwise "".
 
@@ -204,6 +204,32 @@ FINAL CHECKS before returning:
 □ topClosure = "NA" for pull-on kurtas (NOT "None" or "Pull Over")
 □ Return ONLY raw JSON — no markdown, no backticks, no explanation"""
 
+# Platforms a request may target. Each selected platform is charged a flat
+# CREDITS_PER_PLATFORM (6500) and logged as its own user_usage row.
+ALLOWED_PLATFORMS = {"myntra", "ajio"}
+
+
+def parse_platforms(raw: list[str]) -> list[str]:
+    """Normalise the multipart `platforms` field into a validated, de-duped
+    lowercase list. Accepts repeated form fields and/or comma-separated values."""
+    parsed: list[str] = []
+    for value in raw:
+        for part in value.split(","):
+            name = part.strip().lower()
+            if name and name not in parsed:
+                parsed.append(name)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="At least one platform is required")
+    invalid = [p for p in parsed if p not in ALLOWED_PLATFORMS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported platform(s): {', '.join(invalid)}. "
+            f"Allowed: {', '.join(sorted(ALLOWED_PLATFORMS))}",
+        )
+    return parsed
+
+
 def get_user_from_token(token: str):
     """Decode JWT token and extract user info"""
     try:
@@ -219,6 +245,7 @@ def get_user_from_token(token: str):
 async def analyse_product(
     product_name: str = Form(...),
     images: list[UploadFile] = File(...),
+    platforms: list[str] = Form(...),
     additional_requirements: str = Form(""),
     authorization: str = Header(None),
 ):
@@ -227,6 +254,8 @@ async def analyse_product(
 
     - product_name: Name of the product (required)
     - images: Up to 5 product images (required)
+    - platforms: One or more target platforms (e.g. myntra, ajio). Charged a
+      flat 6500 credits each.
     - additional_requirements: Optional free-text instructions from the user
     - Returns: Product analysis with token usage and cost
     """
@@ -243,11 +272,15 @@ async def analyse_product(
     except Exception as e:
         raise HTTPException(status_code=401, detail="Unauthorized - Invalid token")
 
+    # Validate the selected platforms up front (6500 charged per platform).
+    selected_platforms = parse_platforms(platforms)
+    required_credits = len(selected_platforms) * credit_service.CREDITS_PER_PLATFORM
+
     # Resolve the auth uuid -> canonical users.number and hard-stop unless the
-    # user has at least 15,000 credits. This blocks the Claude call entirely
-    # when the balance is below the per-analysis minimum.
+    # user can cover every selected platform. This blocks the Claude call
+    # entirely when the balance is below the total required for the request.
     user_number = await credit_service.get_user_number(user_id)
-    await credit_service.require_positive_balance(user_number, minimum=15_000)
+    await credit_service.require_positive_balance(user_number, minimum=required_credits)
 
     # Validate images
     if not images or len(images) == 0:
@@ -333,9 +366,13 @@ async def analyse_product(
         output_cost = (output_tokens / 1_000_000) * 5 * settings.usd_to_inr
         total_cost_inr = round(input_cost + output_cost, 2)
 
-        # Log usage -> DB trigger deducts credits and writes the audit row.
-        await credit_service.log_usage(
+        # One 6500 charge per selected platform, all in a single atomic batch.
+        # The DB trigger deducts each row and writes its audit line; the real
+        # amounts are read back so the response can't drift from what was
+        # actually charged.
+        credits_deducted, credits_breakdown = await credit_service.log_usage_batch(
             user_number,
+            selected_platforms,
             input_tokens,
             output_tokens,
             catalog_name=product_name,
@@ -343,19 +380,17 @@ async def analyse_product(
             status="success",
         )
 
-        # Charge a flat minimum of 6,500 credits per transaction, or the
-        # token-based amount (input + output) if that is higher.
-        credits_deducted = max(6500, input_tokens + output_tokens)
-
         return {
             "analysis": analysis,
             "product_name": product_name,
+            "platforms": selected_platforms,
             "images_analyzed": len(images),
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_inr": total_cost_inr,
             "cache_read_input_tokens":response.usage.cache_read_input_tokens,
             "credits_deducted": credits_deducted,
+            "credits_breakdown": credits_breakdown,
             "timestamp": datetime.utcnow().isoformat()
         }
 
